@@ -67,10 +67,13 @@
 #undef fstat
 #undef stat
 
+#define lseek microsoft_native_lseek
+#include <io.h>
+#undef lseek
+#define lseek(fd, offset, origin) _lseeki64((fd), (offset), (origin))
+
 /* Must be here to avoid conflicting with prototype in windows.h */
 #define mkdir(a,b)	mkdir(a)
-
-#define ftruncate(a,b)	chsize(a,b)
 
 /* Windows doesn't have fsync() as such, use _commit() */
 #define fsync(fd) _commit(fd)
@@ -224,6 +227,28 @@ extern pgoff_t _pgftello64(FILE *stream);
 #define ftello(stream) ftello64(stream)
 #endif
 #endif
+
+#define ftruncate mingw_native_ftruncate
+#include <unistd.h>
+#undef ftruncate
+static inline int
+ftruncate(int fd, pgoff_t length)
+{
+#if defined(_UCRT) || defined(_MSC_VER)
+	/* MinGW + UCRT and all supported MSVC versions have this. */
+	errno = _chsize_s(fd, length);
+	return errno == 0 ? 0 : -1;
+#else
+	/* MinGW + ancient msvcrt.dll has only _chsize, limited by off_t (long). */
+	if (length > LONG_MAX)
+	{
+		/* A clear error is better than silent corruption. */
+		errno = EFBIG;
+		return - 1;
+	}
+	return _chsize(fd, length);
+#endif
+}
 
 /*
  *	Win32 also doesn't have symlinks, but we can emulate them with
